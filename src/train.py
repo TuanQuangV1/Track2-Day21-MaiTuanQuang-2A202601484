@@ -8,9 +8,7 @@ import os
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, f1_score
 
-# Nguong chat luong cua lab nay la f1_score, KHONG phai accuracy.
-# Ly do: bo du lieu Adult co ty le lop 75/25. Mot mo hinh doan bua
-# "thu nhap thap" cho moi mau da dat accuracy 0.75 ma khong hoc duoc gi.
+# Nguong chat luong cua lab nay la f1_score >= 0.65, KHONG phai accuracy.
 F1_THRESHOLD = 0.65
 
 # Cau hinh MLflow tracking URI (mac dinh la sqlite:///mlflow.db hoac tu bien moi truong)
