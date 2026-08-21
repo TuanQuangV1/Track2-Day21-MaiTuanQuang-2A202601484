@@ -68,14 +68,17 @@ jobs:
         run: |
           if [ -n "$DAGSHUB_TOKEN" ]; then
             echo "Configuring DagsHub credentials..."
-            dvc remote modify origin --local access_key_id "$DAGSHUB_TOKEN"
-            dvc remote modify origin --local secret_access_key "$DAGSHUB_TOKEN"
-            echo "AWS_ACCESS_KEY_ID=$DAGSHUB_TOKEN" >> $GITHUB_ENV
-            echo "AWS_SECRET_ACCESS_KEY=$DAGSHUB_TOKEN" >> $GITHUB_ENV
-            echo "AWS_ENDPOINT_URL=https://dagshub.com/api/v1/repo-buckets/s3/${DAGSHUB_REPO_OWNER}/${DAGSHUB_REPO_NAME}" >> $GITHUB_ENV
-            echo "MLFLOW_TRACKING_URI=https://dagshub.com/${DAGSHUB_REPO_OWNER}/${DAGSHUB_REPO_NAME}.mlflow" >> $GITHUB_ENV
-            echo "MLFLOW_TRACKING_USERNAME=$DAGSHUB_REPO_OWNER" >> $GITHUB_ENV
+            OWNER="${DAGSHUB_REPO_OWNER:-TuanQuangV1}"
+            REPO="${DAGSHUB_REPO_NAME:-Track2-Day21-MaiTuanQuang-2A202601484}"
+            dvc remote modify origin --local auth basic
+            dvc remote modify origin --local user "$OWNER"
+            dvc remote modify origin --local password "$DAGSHUB_TOKEN"
+            echo "MLFLOW_TRACKING_URI=https://dagshub.com/${OWNER}/${REPO}.mlflow" >> $GITHUB_ENV
+            echo "MLFLOW_TRACKING_USERNAME=$OWNER" >> $GITHUB_ENV
             echo "MLFLOW_TRACKING_PASSWORD=$DAGSHUB_TOKEN" >> $GITHUB_ENV
+            echo "DAGSHUB_USER_TOKEN=$DAGSHUB_TOKEN" >> $GITHUB_ENV
+            echo "DAGSHUB_REPO_OWNER=$OWNER" >> $GITHUB_ENV
+            echo "DAGSHUB_REPO_NAME=$REPO" >> $GITHUB_ENV
           elif [ -n "$STORAGE_CREDENTIALS" ]; then
             echo "$STORAGE_CREDENTIALS" > /tmp/sa-key.json
             echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json" >> $GITHUB_ENV
@@ -99,24 +102,19 @@ jobs:
         run: |
           python - <<'PYEOF'
           import os
-          import boto3
 
-          bucket_name = os.environ.get("ARTIFACT_BUCKET", "dvc")
-          endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
-          aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
-          aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+          dagshub_token = os.environ.get("DAGSHUB_USER_TOKEN") or os.environ.get("DAGSHUB_TOKEN")
+          owner = os.environ.get("DAGSHUB_REPO_OWNER", "TuanQuangV1")
+          repo_name = os.environ.get("DAGSHUB_REPO_NAME", "Track2-Day21-MaiTuanQuang-2A202601484")
 
-          if aws_key and aws_secret:
-              s3_client = boto3.client(
-                  "s3",
-                  endpoint_url=endpoint_url,
-                  aws_access_key_id=aws_key,
-                  aws_secret_access_key=aws_secret,
-              )
-              s3_client.upload_file("models/model.joblib", bucket_name, "artifacts/current/model.joblib")
-              print("Uploaded models/model.joblib to DagsHub/S3 storage.")
+          if dagshub_token:
+              from dagshub.upload import Repo
+              repo = Repo(owner, repo_name, token=dagshub_token)
+              repo.upload(local_path="models/model.joblib", remote_path="artifacts/current/model.joblib", commit_message="upload model artifact from CI/CD")
+              print("Uploaded models/model.joblib to DagsHub.")
           elif os.path.exists("/tmp/sa-key.json"):
               from google.cloud import storage
+              bucket_name = os.environ.get("ARTIFACT_BUCKET")
               client = storage.Client()
               bucket = client.bucket(bucket_name)
               blob = bucket.blob("artifacts/current/model.joblib")
