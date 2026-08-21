@@ -1,41 +1,66 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from google.cloud import storage
 import joblib
 import os
+import boto3
 
 app = FastAPI()
 
-ARTIFACT_BUCKET = os.environ["ARTIFACT_BUCKET"]
+ARTIFACT_BUCKET = os.environ.get("ARTIFACT_BUCKET", "dvc")
 MODEL_KEY = "artifacts/current/model.joblib"
 MODEL_PATH = os.path.expanduser("~/models/model.joblib")
 
 
 def download_model():
-    """
-    Tai file model.joblib tu cloud storage ve may khi server khoi dong.
+    """Tai file model.joblib tu cloud storage (S3 / DagsHub / GCS) ve may khi server khoi dong."""
+    os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+    
+    # 1. Thu tai qua S3 / DagsHub neu co bien S3/AWS
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT_URL")
+    aws_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
+    aws_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    
+    if aws_access_key and aws_secret_key:
+        s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+        )
+        s3_client.download_file(ARTIFACT_BUCKET, MODEL_KEY, MODEL_PATH)
+        print("Model da duoc tai xuong tu S3/DagsHub storage.")
+        return
 
-    Ham nay duoc goi mot lan khi module duoc import. Su dung
-    GOOGLE_APPLICATION_CREDENTIALS de xac thuc (duoc dat trong systemd service).
-    """
-    # TODO 1: Tao storage.Client()
-    # client = storage.Client()
-
-    # TODO 2: Lay bucket va blob tuong ung
-    # bucket = client.bucket(ARTIFACT_BUCKET)
-    # blob   = bucket.blob(MODEL_KEY)
-
-    # TODO 3: Tai file model xuong may
-    # blob.download_to_filename(MODEL_PATH)
-
-    # TODO 4: In thong bao thanh cong
-    # print("Model da duoc tai xuong tu cloud storage.")
-
-    pass  # xoa dong nay sau khi hoan thanh tat ca TODO ben tren
+    # 2. Thu tai qua Google Cloud Storage
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(ARTIFACT_BUCKET)
+        blob = bucket.blob(MODEL_KEY)
+        blob.download_to_filename(MODEL_PATH)
+        print("Model da duoc tai xuong tu Google Cloud Storage.")
+        return
+    except Exception as e:
+        print(f"Warning: Khong the tai model tu GCS: {e}")
 
 
-download_model()
-model = joblib.load(MODEL_PATH)
+if not os.path.exists(MODEL_PATH):
+    try:
+        download_model()
+    except Exception as e:
+        print(f"Warning: {e}")
+
+model = None
+if os.path.exists(MODEL_PATH):
+    model = joblib.load(MODEL_PATH)
+elif os.path.exists("models/model.joblib"):
+    model = joblib.load("models/model.joblib")
+
+
+FEATURE_NAMES = [
+    "age", "workclass", "education_num", "marital_status", "occupation",
+    "relationship", "sex", "capital_gain", "capital_loss", "hours_per_week",
+]
 
 
 class ScoreRequest(BaseModel):
@@ -44,39 +69,29 @@ class ScoreRequest(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    """
-    Endpoint kiem tra suc khoe server.
-    GitHub Actions goi endpoint nay sau khi deploy de xac nhan server dang chay.
-
-    Tra ve: {"status": "ok"}
-    """
-    # TODO 5: Tra ve dict {"status": "ok"}
-    pass  # xoa dong nay sau khi hoan thanh
+    return {"status": "ok"}
 
 
 @app.post("/score")
 def score(req: ScoreRequest):
-    """
-    Endpoint suy luan chinh.
+    if len(req.features) != 10:
+        raise HTTPException(status_code=400, detail="Expected 10 features (adult income)")
 
-    Dau vao : JSON {"features": [f1, f2, ..., f10]}
-    Dau ra  : JSON {"prediction": <0|1>, "label": <"thu_nhap_thap"|"thu_nhap_cao">}
+    global model
+    if model is None:
+        if os.path.exists(MODEL_PATH):
+            model = joblib.load(MODEL_PATH)
+        elif os.path.exists("models/model.joblib"):
+            model = joblib.load("models/model.joblib")
+        else:
+            raise HTTPException(status_code=500, detail="Model is not loaded")
 
-    Thu tu 10 dac trung (khop voi thu tu trong FEATURE_NAMES cua test):
-        age, workclass, education_num, marital_status, occupation,
-        relationship, sex, capital_gain, capital_loss, hours_per_week
-    """
-    # TODO 6: Kiem tra so luong dac trung.
-    # Neu len(req.features) != 10, raise HTTPException(status_code=400, ...)
+    import pandas as pd
+    df_features = pd.DataFrame([req.features], columns=FEATURE_NAMES)
+    pred = int(model.predict(df_features)[0])
+    label = "thu_nhap_cao" if pred == 1 else "thu_nhap_thap"
 
-    # TODO 7: Goi model.predict([req.features]) de lay ket qua du doan.
-    # pred = model.predict(...)
-
-    # TODO 8: Tra ve dict chua "prediction" (int) va "label" (string).
-    # Nhan tuong ung: 0 -> "thu_nhap_thap", 1 -> "thu_nhap_cao"
-    # return {"prediction": ..., "label": ...}
-
-    pass  # xoa dong nay sau khi hoan thanh tat ca TODO ben tren
+    return {"prediction": pred, "label": label}
 
 
 if __name__ == "__main__":
